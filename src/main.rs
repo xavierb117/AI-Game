@@ -28,6 +28,10 @@ const SQUARE_NUMBER_MAX: i32 = 99;
 const TARGET_MIN: i32 = 1;
 const TARGET_MAX: i32 = 999;
 
+const PLAYER_SIZE: f32 = 36.0;
+const PLAYER_SPEED: f32 = 320.0;
+const PLAYER_COLOR: Color = Color::srgb(0.15, 0.72, 0.28);
+
 /// Random value chosen at startup; use this resource for game logic later.
 #[derive(Resource, Debug, Clone, Copy)]
 struct TargetNumber(u32);
@@ -45,21 +49,32 @@ struct GridSquare {
     value: i32,
 }
 
+#[derive(Component)]
+struct Player;
+
 fn main() {
     App::new()
         .insert_resource(ClearColor(BACKGROUND_COLOR))
         .add_plugins(DefaultPlugins)
         .add_systems(Startup, setup)
+        .add_systems(Update, move_player)
         .run();
 }
 
-fn setup(mut commands: Commands) {
+fn setup(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
     let (target, values) = generate_solvable_puzzle();
     commands.insert_resource(TargetNumber(target));
 
+    let grid_offset_y = -((TOP_BAR_HEIGHT + TOP_BAR_GAP) / 2.0);
+
     commands.spawn(Camera2d);
-    setup_grid(&mut commands, values);
+    setup_grid(&mut commands, values, grid_offset_y);
     setup_top_bar(&mut commands, target);
+    setup_player(&mut commands, &mut meshes, &mut materials, grid_offset_y);
 }
 
 fn generate_grid_values() -> [[i32; GRID_COLUMNS as usize]; GRID_ROWS as usize] {
@@ -117,9 +132,11 @@ fn generate_solvable_puzzle() -> (u32, [[i32; GRID_COLUMNS as usize]; GRID_ROWS 
     }
 }
 
-fn setup_grid(commands: &mut Commands, values: [[i32; GRID_COLUMNS as usize]; GRID_ROWS as usize]) {
-    let grid_offset_y = -((TOP_BAR_HEIGHT + TOP_BAR_GAP) / 2.0);
-
+fn setup_grid(
+    commands: &mut Commands,
+    values: [[i32; GRID_COLUMNS as usize]; GRID_ROWS as usize],
+    grid_offset_y: f32,
+) {
     for row in 0..GRID_ROWS {
         for col in 0..GRID_COLUMNS {
             let value = values[row as usize][col as usize];
@@ -150,6 +167,56 @@ fn setup_grid(commands: &mut Commands, values: [[i32; GRID_COLUMNS as usize]; GR
     }
 
     commands.insert_resource(GridValues(values));
+}
+
+fn setup_player(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<ColorMaterial>>,
+    grid_offset_y: f32,
+) {
+    let half = PLAYER_SIZE / 2.0;
+    let triangle = Triangle2d::new(
+        Vec2::new(0.0, half),
+        Vec2::new(-half, -half),
+        Vec2::new(half, -half),
+    );
+
+    commands.spawn((
+        Mesh2d(meshes.add(triangle)),
+        MeshMaterial2d(materials.add(PLAYER_COLOR)),
+        Transform::from_xyz(0.0, grid_offset_y, 10.0),
+        Player,
+    ));
+}
+
+fn move_player(
+    time: Res<Time>,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut player: Query<&mut Transform, With<Player>>,
+) {
+    let Ok(mut transform) = player.single_mut() else {
+        return;
+    };
+
+    let mut direction = Vec2::ZERO;
+    if keyboard.pressed(KeyCode::ArrowLeft) {
+        direction.x -= 1.0;
+    }
+    if keyboard.pressed(KeyCode::ArrowRight) {
+        direction.x += 1.0;
+    }
+    if keyboard.pressed(KeyCode::ArrowUp) {
+        direction.y += 1.0;
+    }
+    if keyboard.pressed(KeyCode::ArrowDown) {
+        direction.y -= 1.0;
+    }
+
+    if direction != Vec2::ZERO {
+        direction = direction.normalize();
+        transform.translation += (direction * PLAYER_SPEED * time.delta_secs()).extend(0.0);
+    }
 }
 
 fn setup_top_bar(commands: &mut Commands, number: u32) {
