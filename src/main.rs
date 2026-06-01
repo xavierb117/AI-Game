@@ -36,6 +36,8 @@ const CURRENT_SUM_FONT_SIZE: f32 = 42.0;
 const CURRENT_SUM_PANEL_WIDTH: f32 = 140.0;
 const GAME_TIMER_SECS: f32 = 180.0;
 const TIMER_FONT_SIZE: f32 = 42.0;
+const INSTRUCTIONS_PANEL_WIDTH: f32 = 280.0;
+const INSTRUCTIONS_FONT_SIZE: f32 = 22.0;
 const BARRIER_THICKNESS: f32 = 20.0;
 const BARRIER_COLOR: Color = Color::srgb(0.82, 0.82, 0.82);
 const GAME_OVER_OVERLAY: Color = Color::srgba(0.0, 0.0, 0.0, 0.55);
@@ -143,6 +145,7 @@ fn setup(
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     commands.spawn(Camera2d);
+    setup_instructions(&mut commands);
     setup_current_sum_ui(&mut commands);
     setup_top_bar(&mut commands);
     start_new_round(&mut commands, &mut meshes, &mut materials);
@@ -591,6 +594,41 @@ fn try_again_button(
             Interaction::None => *color = TRY_AGAIN_BUTTON.into(),
         }
     }
+}
+
+fn setup_instructions(commands: &mut Commands) {
+    let text_style = (
+        TextFont {
+            font_size: INSTRUCTIONS_FONT_SIZE,
+            ..default()
+        },
+        TextColor(Color::BLACK),
+    );
+
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::ZERO,
+                top: px(TOP_BAR_HEIGHT + TOP_BAR_GAP),
+                width: px(INSTRUCTIONS_PANEL_WIDTH),
+                height: percent(100),
+                padding: UiRect::all(px(16)),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::FlexStart,
+                row_gap: px(20),
+                ..default()
+            },
+        ))
+        .with_children(|parent| {
+            for line in [
+                "Reach the target sum at the top before time runs out.",
+                "Current count is the sum you are adding and substracting to",
+                "Use arrow keys to move the triangle to the squares",
+            ] {
+                parent.spawn((Text::new(line), text_style.clone()));
+            }
+        });
 }
 
 fn setup_current_sum_ui(commands: &mut Commands) {
