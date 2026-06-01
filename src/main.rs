@@ -34,6 +34,8 @@ const PLAYER_SPEED: f32 = 320.0;
 const PLAYER_COLOR: Color = Color::srgb(0.15, 0.72, 0.28);
 const CURRENT_SUM_FONT_SIZE: f32 = 42.0;
 const CURRENT_SUM_PANEL_WIDTH: f32 = 140.0;
+const BARRIER_THICKNESS: f32 = 20.0;
+const BARRIER_COLOR: Color = Color::srgb(0.82, 0.82, 0.82);
 
 /// Random value chosen at startup; use this resource for game logic later.
 #[derive(Resource, Debug, Clone, Copy)]
@@ -65,6 +67,13 @@ struct CurrentSumUi;
 #[derive(Component)]
 struct Visited;
 
+/// Inner playable area inside the gray barriers (player stays within this).
+#[derive(Resource, Clone, Copy)]
+struct PlayAreaBounds {
+    min: Vec2,
+    max: Vec2,
+}
+
 fn main() {
     App::new()
         .insert_resource(ClearColor(BACKGROUND_COLOR))
@@ -86,9 +95,12 @@ fn setup(
     commands.insert_resource(TargetNumber(target));
 
     let grid_offset_y = -((TOP_BAR_HEIGHT + TOP_BAR_GAP) / 2.0);
+    let play_bounds = compute_play_area_bounds(grid_offset_y);
+    commands.insert_resource(play_bounds);
 
     commands.spawn(Camera2d);
     setup_grid(&mut commands, values, grid_offset_y);
+    setup_barriers(&mut commands, grid_offset_y);
     setup_top_bar(&mut commands, target);
     setup_current_sum_ui(&mut commands);
     setup_player(&mut commands, &mut meshes, &mut materials, grid_offset_y);
@@ -186,6 +198,49 @@ fn setup_grid(
     commands.insert_resource(GridValues(values));
 }
 
+fn compute_play_area_bounds(grid_offset_y: f32) -> PlayAreaBounds {
+    let half_extent = 1.5 * CELL_PITCH + SQUARE_SIZE / 2.0;
+
+    PlayAreaBounds {
+        min: Vec2::new(-half_extent, grid_offset_y - half_extent),
+        max: Vec2::new(half_extent, grid_offset_y + half_extent),
+    }
+}
+
+fn setup_barriers(commands: &mut Commands, grid_offset_y: f32) {
+    let bounds = compute_play_area_bounds(grid_offset_y);
+    let grid_width = bounds.max.x - bounds.min.x;
+    let grid_height = bounds.max.y - bounds.min.y;
+    let center_x = (bounds.min.x + bounds.max.x) / 2.0;
+    let center_y = (bounds.min.y + bounds.max.y) / 2.0;
+    let wall_span_x = grid_width + 2.0 * BARRIER_THICKNESS;
+    let wall_span_y = grid_height + 2.0 * BARRIER_THICKNESS;
+
+    let barrier = |size: Vec2, position: Vec3| {
+        (
+            Sprite::from_color(BARRIER_COLOR, size),
+            Transform::from_translation(position),
+        )
+    };
+
+    commands.spawn(barrier(
+        Vec2::new(wall_span_x, BARRIER_THICKNESS),
+        Vec3::new(center_x, bounds.max.y + BARRIER_THICKNESS / 2.0, 5.0),
+    ));
+    commands.spawn(barrier(
+        Vec2::new(wall_span_x, BARRIER_THICKNESS),
+        Vec3::new(center_x, bounds.min.y - BARRIER_THICKNESS / 2.0, 5.0),
+    ));
+    commands.spawn(barrier(
+        Vec2::new(BARRIER_THICKNESS, wall_span_y),
+        Vec3::new(bounds.min.x - BARRIER_THICKNESS / 2.0, center_y, 5.0),
+    ));
+    commands.spawn(barrier(
+        Vec2::new(BARRIER_THICKNESS, wall_span_y),
+        Vec3::new(bounds.max.x + BARRIER_THICKNESS / 2.0, center_y, 5.0),
+    ));
+}
+
 fn setup_player(
     commands: &mut Commands,
     meshes: &mut ResMut<Assets<Mesh>>,
@@ -210,6 +265,7 @@ fn setup_player(
 fn move_player(
     time: Res<Time>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    play_bounds: Res<PlayAreaBounds>,
     mut player: Query<&mut Transform, With<Player>>,
 ) {
     let Ok(mut transform) = player.single_mut() else {
@@ -234,6 +290,16 @@ fn move_player(
         direction = direction.normalize();
         transform.translation += (direction * PLAYER_SPEED * time.delta_secs()).extend(0.0);
     }
+
+    let margin = PLAYER_SIZE / 2.0;
+    transform.translation.x = transform
+        .translation
+        .x
+        .clamp(play_bounds.min.x + margin, play_bounds.max.x - margin);
+    transform.translation.y = transform
+        .translation
+        .y
+        .clamp(play_bounds.min.y + margin, play_bounds.max.y - margin);
 }
 
 fn player_overlaps_square(player_pos: Vec2, square_pos: Vec2) -> bool {
