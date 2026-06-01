@@ -18,6 +18,7 @@ const GAP_SIZE: f32 = GAP_CM * PIXELS_PER_CM;
 const CELL_PITCH: f32 = SQUARE_SIZE + GAP_SIZE;
 
 const SQUARE_COLOR: Color = Color::srgb(0.68, 0.85, 0.98);
+const VISITED_SQUARE_COLOR: Color = Color::srgb(0.98, 0.78, 0.78);
 const BACKGROUND_COLOR: Color = Color::srgb(1.0, 1.0, 0.88);
 const TOP_BAR_HEIGHT: f32 = 72.0;
 const TOP_BAR_GAP_CM: f32 = 2.0;
@@ -31,6 +32,8 @@ const TARGET_MAX: i32 = 999;
 const PLAYER_SIZE: f32 = 36.0;
 const PLAYER_SPEED: f32 = 320.0;
 const PLAYER_COLOR: Color = Color::srgb(0.15, 0.72, 0.28);
+const CURRENT_SUM_FONT_SIZE: f32 = 42.0;
+const CURRENT_SUM_PANEL_WIDTH: f32 = 140.0;
 
 /// Random value chosen at startup; use this resource for game logic later.
 #[derive(Resource, Debug, Clone, Copy)]
@@ -52,12 +55,25 @@ struct GridSquare {
 #[derive(Component)]
 struct Player;
 
+/// Running total from grid squares the player has touched.
+#[derive(Resource, Default)]
+struct CurrentSum(i32);
+
+#[derive(Component)]
+struct CurrentSumUi;
+
+#[derive(Component)]
+struct Visited;
+
 fn main() {
     App::new()
         .insert_resource(ClearColor(BACKGROUND_COLOR))
         .add_plugins(DefaultPlugins)
         .add_systems(Startup, setup)
-        .add_systems(Update, move_player)
+        .add_systems(
+            Update,
+            (move_player, collect_square_values, update_current_sum_display).chain(),
+        )
         .run();
 }
 
@@ -74,6 +90,7 @@ fn setup(
     commands.spawn(Camera2d);
     setup_grid(&mut commands, values, grid_offset_y);
     setup_top_bar(&mut commands, target);
+    setup_current_sum_ui(&mut commands);
     setup_player(&mut commands, &mut meshes, &mut materials, grid_offset_y);
 }
 
@@ -217,6 +234,86 @@ fn move_player(
         direction = direction.normalize();
         transform.translation += (direction * PLAYER_SPEED * time.delta_secs()).extend(0.0);
     }
+}
+
+fn player_overlaps_square(player_pos: Vec2, square_pos: Vec2) -> bool {
+    let half = SQUARE_SIZE / 2.0;
+    let min = square_pos - Vec2::splat(half);
+    let max = square_pos + Vec2::splat(half);
+
+    player_pos.x >= min.x
+        && player_pos.x <= max.x
+        && player_pos.y >= min.y
+        && player_pos.y <= max.y
+}
+
+fn collect_square_values(
+    mut current_sum: ResMut<CurrentSum>,
+    player: Query<&Transform, With<Player>>,
+    mut squares: Query<(Entity, &Transform, &GridSquare, &mut Sprite), Without<Visited>>,
+    mut commands: Commands,
+) {
+    let Ok(player_transform) = player.single() else {
+        return;
+    };
+    let player_pos = player_transform.translation.truncate();
+
+    for (entity, square_transform, grid_square, mut sprite) in &mut squares {
+        let square_pos = square_transform.translation.truncate();
+        if player_overlaps_square(player_pos, square_pos) {
+            current_sum.0 += grid_square.value;
+            sprite.color = VISITED_SQUARE_COLOR;
+            commands.entity(entity).insert(Visited);
+        }
+    }
+}
+
+fn update_current_sum_display(
+    current_sum: Res<CurrentSum>,
+    text_root: Single<Entity, (With<CurrentSumUi>, With<Text>)>,
+    mut writer: TextUiWriter,
+) {
+    *writer.text(*text_root, 1) = current_sum.0.to_string();
+}
+
+fn setup_current_sum_ui(commands: &mut Commands) {
+    commands.insert_resource(CurrentSum::default());
+
+    let sum_text_style = (
+        TextFont {
+            font_size: CURRENT_SUM_FONT_SIZE,
+            ..default()
+        },
+        TextColor(Color::BLACK),
+    );
+
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            right: Val::ZERO,
+            top: px(TOP_BAR_HEIGHT + TOP_BAR_GAP),
+            width: px(CURRENT_SUM_PANEL_WIDTH),
+            height: percent(100),
+            padding: UiRect::all(px(16)),
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::FlexEnd,
+            row_gap: px(8),
+            ..default()
+        },
+        children![(
+            Text::new("Current"),
+            TextFont {
+                font_size: 28.0,
+                ..default()
+            },
+            TextColor(Color::BLACK),
+        ), (
+            Text::new(""),
+            CurrentSumUi,
+            sum_text_style.clone(),
+            children![(TextSpan::default(), sum_text_style)],
+        )],
+    ));
 }
 
 fn setup_top_bar(commands: &mut Commands, number: u32) {
