@@ -84,6 +84,7 @@ struct PlayAreaBounds {
 enum GameState {
     #[default]
     Playing,
+    Won,
     Lost,
 }
 
@@ -94,7 +95,7 @@ struct GameEntity;
 struct TargetUi;
 
 #[derive(Component)]
-struct GameOverScreen;
+struct EndGameScreen;
 
 #[derive(Component)]
 struct TryAgainButton;
@@ -113,7 +114,7 @@ fn main() {
                     move_player,
                     collect_square_values,
                     update_current_sum_display,
-                    check_loss,
+                    check_game_end,
                 )
                     .chain()
                     .run_if(in_state(GameState::Playing)),
@@ -407,32 +408,35 @@ fn update_current_sum_display(
     *writer.text(*text_root, 1) = current_sum.0.to_string();
 }
 
-fn check_loss(
+fn check_game_end(
     mut commands: Commands,
     mut next_state: ResMut<NextState<GameState>>,
     current_sum: Res<CurrentSum>,
     target: Res<TargetNumber>,
     visited: Query<(), With<Visited>>,
-    game_over: Query<(), With<GameOverScreen>>,
+    end_screen: Query<(), With<EndGameScreen>>,
 ) {
+    if current_sum.0 == target.0 as i32 {
+        next_state.set(GameState::Won);
+        if end_screen.is_empty() {
+            spawn_end_screen(&mut commands, "You won!");
+        }
+        return;
+    }
+
     if visited.iter().count() < TOTAL_GRID_SQUARES {
         return;
     }
 
-    if current_sum.0 == target.0 as i32 {
-        return;
-    }
-
     next_state.set(GameState::Lost);
-
-    if game_over.is_empty() {
-        spawn_game_over(&mut commands);
+    if end_screen.is_empty() {
+        spawn_end_screen(&mut commands, "You lost");
     }
 }
 
-fn spawn_game_over(commands: &mut Commands) {
+fn spawn_end_screen(commands: &mut Commands, message: &str) {
     commands.spawn((
-        GameOverScreen,
+        EndGameScreen,
         Node {
             position_type: PositionType::Absolute,
             width: percent(100),
@@ -454,7 +458,7 @@ fn spawn_game_over(commands: &mut Commands) {
             BackgroundColor(GAME_OVER_PANEL),
             children![
                 (
-                    Text::new("You lost"),
+                    Text::new(message),
                     TextFont {
                         font_size: 48.0,
                         ..default()
@@ -495,12 +499,12 @@ fn try_again_button(
         (Changed<Interaction>, With<TryAgainButton>),
     >,
     game_entities: Query<Entity, With<GameEntity>>,
-    game_over: Query<Entity, With<GameOverScreen>>,
+    end_screen: Query<Entity, With<EndGameScreen>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     state: Res<State<GameState>>,
 ) {
-    if *state.get() != GameState::Lost {
+    if !matches!(*state.get(), GameState::Won | GameState::Lost) {
         return;
     }
 
@@ -510,7 +514,7 @@ fn try_again_button(
                 for entity in &game_entities {
                     commands.entity(entity).despawn();
                 }
-                for entity in &game_over {
+                for entity in &end_screen {
                     commands.entity(entity).despawn();
                 }
                 start_new_round(&mut commands, &mut meshes, &mut materials);
