@@ -36,6 +36,12 @@ const CURRENT_SUM_FONT_SIZE: f32 = 42.0;
 const CURRENT_SUM_PANEL_WIDTH: f32 = 140.0;
 const BARRIER_THICKNESS: f32 = 20.0;
 const BARRIER_COLOR: Color = Color::srgb(0.82, 0.82, 0.82);
+const GAME_OVER_OVERLAY: Color = Color::srgba(0.0, 0.0, 0.0, 0.55);
+const GAME_OVER_PANEL: Color = Color::srgb(1.0, 1.0, 1.0);
+const TRY_AGAIN_BUTTON: Color = Color::srgb(0.25, 0.45, 0.85);
+const TRY_AGAIN_BUTTON_HOVER: Color = Color::srgb(0.35, 0.55, 0.95);
+
+const TOTAL_GRID_SQUARES: usize = (GRID_ROWS * GRID_COLUMNS) as usize;
 
 /// Random value chosen at startup; use this resource for game logic later.
 #[derive(Resource, Debug, Clone, Copy)]
@@ -74,14 +80,45 @@ struct PlayAreaBounds {
     max: Vec2,
 }
 
+#[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+enum GameState {
+    #[default]
+    Playing,
+    Lost,
+}
+
+#[derive(Component)]
+struct GameEntity;
+
+#[derive(Component)]
+struct TargetUi;
+
+#[derive(Component)]
+struct GameOverScreen;
+
+#[derive(Component)]
+struct TryAgainButton;
+
 fn main() {
     App::new()
         .insert_resource(ClearColor(BACKGROUND_COLOR))
         .add_plugins(DefaultPlugins)
+        .init_state::<GameState>()
         .add_systems(Startup, setup)
         .add_systems(
             Update,
-            (move_player, collect_square_values, update_current_sum_display).chain(),
+            (
+                sync_target_display,
+                (
+                    move_player,
+                    collect_square_values,
+                    update_current_sum_display,
+                    check_loss,
+                )
+                    .chain()
+                    .run_if(in_state(GameState::Playing)),
+                try_again_button,
+            ),
         )
         .run();
 }
@@ -91,19 +128,33 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
+    commands.spawn(Camera2d);
+    setup_current_sum_ui(&mut commands);
+    setup_top_bar(&mut commands);
+    start_new_round(&mut commands, &mut meshes, &mut materials);
+}
+
+fn start_new_round(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<ColorMaterial>>,
+) {
     let (target, values) = generate_solvable_puzzle();
     commands.insert_resource(TargetNumber(target));
+    commands.insert_resource(CurrentSum(0));
 
     let grid_offset_y = -((TOP_BAR_HEIGHT + TOP_BAR_GAP) / 2.0);
-    let play_bounds = compute_play_area_bounds(grid_offset_y);
-    commands.insert_resource(play_bounds);
+    commands.insert_resource(compute_play_area_bounds(grid_offset_y));
 
-    commands.spawn(Camera2d);
-    setup_grid(&mut commands, values, grid_offset_y);
-    setup_barriers(&mut commands, grid_offset_y);
-    setup_top_bar(&mut commands, target);
-    setup_current_sum_ui(&mut commands);
-    setup_player(&mut commands, &mut meshes, &mut materials, grid_offset_y);
+    setup_grid(commands, values, grid_offset_y);
+    setup_barriers(commands, grid_offset_y);
+    setup_player(commands, meshes, materials, grid_offset_y);
+}
+
+fn sync_target_display(target: Res<TargetNumber>, mut text: Single<&mut Text, With<TargetUi>>) {
+    if target.is_changed() {
+        **text = Text::new(target.0.to_string());
+    }
 }
 
 fn generate_grid_values() -> [[i32; GRID_COLUMNS as usize]; GRID_ROWS as usize] {
@@ -176,6 +227,7 @@ fn setup_grid(
             commands.spawn((
                 Sprite::from_color(SQUARE_COLOR, Vec2::splat(SQUARE_SIZE)),
                 Transform::from_xyz(x, y, 0.0),
+                GameEntity,
                 GridSquare {
                     row: row as usize,
                     col: col as usize,
@@ -223,21 +275,33 @@ fn setup_barriers(commands: &mut Commands, grid_offset_y: f32) {
         )
     };
 
-    commands.spawn(barrier(
-        Vec2::new(wall_span_x, BARRIER_THICKNESS),
-        Vec3::new(center_x, bounds.max.y + BARRIER_THICKNESS / 2.0, 5.0),
+    commands.spawn((
+        barrier(
+            Vec2::new(wall_span_x, BARRIER_THICKNESS),
+            Vec3::new(center_x, bounds.max.y + BARRIER_THICKNESS / 2.0, 5.0),
+        ),
+        GameEntity,
     ));
-    commands.spawn(barrier(
-        Vec2::new(wall_span_x, BARRIER_THICKNESS),
-        Vec3::new(center_x, bounds.min.y - BARRIER_THICKNESS / 2.0, 5.0),
+    commands.spawn((
+        barrier(
+            Vec2::new(wall_span_x, BARRIER_THICKNESS),
+            Vec3::new(center_x, bounds.min.y - BARRIER_THICKNESS / 2.0, 5.0),
+        ),
+        GameEntity,
     ));
-    commands.spawn(barrier(
-        Vec2::new(BARRIER_THICKNESS, wall_span_y),
-        Vec3::new(bounds.min.x - BARRIER_THICKNESS / 2.0, center_y, 5.0),
+    commands.spawn((
+        barrier(
+            Vec2::new(BARRIER_THICKNESS, wall_span_y),
+            Vec3::new(bounds.min.x - BARRIER_THICKNESS / 2.0, center_y, 5.0),
+        ),
+        GameEntity,
     ));
-    commands.spawn(barrier(
-        Vec2::new(BARRIER_THICKNESS, wall_span_y),
-        Vec3::new(bounds.max.x + BARRIER_THICKNESS / 2.0, center_y, 5.0),
+    commands.spawn((
+        barrier(
+            Vec2::new(BARRIER_THICKNESS, wall_span_y),
+            Vec3::new(bounds.max.x + BARRIER_THICKNESS / 2.0, center_y, 5.0),
+        ),
+        GameEntity,
     ));
 }
 
@@ -259,6 +323,7 @@ fn setup_player(
         MeshMaterial2d(materials.add(PLAYER_COLOR)),
         Transform::from_xyz(0.0, grid_offset_y, 10.0),
         Player,
+        GameEntity,
     ));
 }
 
@@ -342,8 +407,123 @@ fn update_current_sum_display(
     *writer.text(*text_root, 1) = current_sum.0.to_string();
 }
 
+fn check_loss(
+    mut commands: Commands,
+    mut next_state: ResMut<NextState<GameState>>,
+    current_sum: Res<CurrentSum>,
+    target: Res<TargetNumber>,
+    visited: Query<(), With<Visited>>,
+    game_over: Query<(), With<GameOverScreen>>,
+) {
+    if visited.iter().count() < TOTAL_GRID_SQUARES {
+        return;
+    }
+
+    if current_sum.0 == target.0 as i32 {
+        return;
+    }
+
+    next_state.set(GameState::Lost);
+
+    if game_over.is_empty() {
+        spawn_game_over(&mut commands);
+    }
+}
+
+fn spawn_game_over(commands: &mut Commands) {
+    commands.spawn((
+        GameOverScreen,
+        Node {
+            position_type: PositionType::Absolute,
+            width: percent(100),
+            height: percent(100),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        BackgroundColor(GAME_OVER_OVERLAY),
+        children![(
+            Node {
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                row_gap: px(24),
+                padding: UiRect::all(px(32)),
+                border_radius: BorderRadius::all(px(12)),
+                ..default()
+            },
+            BackgroundColor(GAME_OVER_PANEL),
+            children![
+                (
+                    Text::new("You lost"),
+                    TextFont {
+                        font_size: 48.0,
+                        ..default()
+                    },
+                    TextColor(Color::BLACK),
+                ),
+                (
+                    Button,
+                    TryAgainButton,
+                    Node {
+                        width: px(180),
+                        height: px(56),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        border_radius: BorderRadius::all(px(8)),
+                        ..default()
+                    },
+                    BackgroundColor(TRY_AGAIN_BUTTON),
+                    children![(
+                        Text::new("Try again"),
+                        TextFont {
+                            font_size: 28.0,
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                    )],
+                )
+            ]
+        )],
+    ));
+}
+
+fn try_again_button(
+    mut commands: Commands,
+    mut next_state: ResMut<NextState<GameState>>,
+    mut interaction_query: Query<
+        (&Interaction, &mut BackgroundColor),
+        (Changed<Interaction>, With<TryAgainButton>),
+    >,
+    game_entities: Query<Entity, With<GameEntity>>,
+    game_over: Query<Entity, With<GameOverScreen>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    state: Res<State<GameState>>,
+) {
+    if *state.get() != GameState::Lost {
+        return;
+    }
+
+    for (interaction, mut color) in &mut interaction_query {
+        match *interaction {
+            Interaction::Pressed => {
+                for entity in &game_entities {
+                    commands.entity(entity).despawn();
+                }
+                for entity in &game_over {
+                    commands.entity(entity).despawn();
+                }
+                start_new_round(&mut commands, &mut meshes, &mut materials);
+                next_state.set(GameState::Playing);
+            }
+            Interaction::Hovered => *color = TRY_AGAIN_BUTTON_HOVER.into(),
+            Interaction::None => *color = TRY_AGAIN_BUTTON.into(),
+        }
+    }
+}
+
 fn setup_current_sum_ui(commands: &mut Commands) {
-    commands.insert_resource(CurrentSum::default());
+    commands.insert_resource(CurrentSum(0));
 
     let sum_text_style = (
         TextFont {
@@ -382,7 +562,7 @@ fn setup_current_sum_ui(commands: &mut Commands) {
     ));
 }
 
-fn setup_top_bar(commands: &mut Commands, number: u32) {
+fn setup_top_bar(commands: &mut Commands) {
     commands
         .spawn((
             Node {
@@ -399,7 +579,8 @@ fn setup_top_bar(commands: &mut Commands, number: u32) {
         ))
         .with_children(|parent| {
             parent.spawn((
-                Text::new(number.to_string()),
+                Text::new("0"),
+                TargetUi,
                 TextFont {
                     font_size: TOP_BAR_FONT_SIZE,
                     ..default()
