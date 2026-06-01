@@ -34,6 +34,8 @@ const PLAYER_SPEED: f32 = 320.0;
 const PLAYER_COLOR: Color = Color::srgb(0.15, 0.72, 0.28);
 const CURRENT_SUM_FONT_SIZE: f32 = 42.0;
 const CURRENT_SUM_PANEL_WIDTH: f32 = 140.0;
+const GAME_TIMER_SECS: f32 = 180.0;
+const TIMER_FONT_SIZE: f32 = 42.0;
 const BARRIER_THICKNESS: f32 = 20.0;
 const BARRIER_COLOR: Color = Color::srgb(0.82, 0.82, 0.82);
 const GAME_OVER_OVERLAY: Color = Color::srgba(0.0, 0.0, 0.0, 0.55);
@@ -69,6 +71,14 @@ struct CurrentSum(i32);
 
 #[derive(Component)]
 struct CurrentSumUi;
+
+#[derive(Component)]
+struct TimerUi;
+
+#[derive(Resource)]
+struct GameTimer {
+    remaining_secs: f32,
+}
 
 #[derive(Component)]
 struct Visited;
@@ -114,7 +124,10 @@ fn main() {
                     move_player,
                     collect_square_values,
                     update_current_sum_display,
+                    tick_timer,
+                    update_timer_display,
                     check_game_end,
+                    check_timer_expired,
                 )
                     .chain()
                     .run_if(in_state(GameState::Playing)),
@@ -143,6 +156,7 @@ fn start_new_round(
     let (target, values) = generate_solvable_puzzle();
     commands.insert_resource(TargetNumber(target));
     commands.insert_resource(CurrentSum(0));
+    commands.insert_resource(GameTimer::new(GAME_TIMER_SECS));
 
     let grid_offset_y = -((TOP_BAR_HEIGHT + TOP_BAR_GAP) / 2.0);
     commands.insert_resource(compute_play_area_bounds(grid_offset_y));
@@ -408,6 +422,59 @@ fn update_current_sum_display(
     *writer.text(*text_root, 1) = current_sum.0.to_string();
 }
 
+impl GameTimer {
+    fn new(duration_secs: f32) -> Self {
+        Self {
+            remaining_secs: duration_secs,
+        }
+    }
+
+    fn display_seconds(&self) -> u32 {
+        self.remaining_secs.max(0.0).ceil() as u32
+    }
+}
+
+fn tick_timer(time: Res<Time>, mut timer: ResMut<GameTimer>) {
+    timer.remaining_secs -= time.delta_secs();
+    if timer.remaining_secs < 0.0 {
+        timer.remaining_secs = 0.0;
+    }
+}
+
+fn update_timer_display(
+    timer: Res<GameTimer>,
+    text_root: Single<Entity, (With<TimerUi>, With<Text>)>,
+    mut writer: TextUiWriter,
+) {
+    *writer.text(*text_root, 1) = timer.display_seconds().to_string();
+}
+
+fn check_timer_expired(
+    mut commands: Commands,
+    mut next_state: ResMut<NextState<GameState>>,
+    timer: Res<GameTimer>,
+    current_sum: Res<CurrentSum>,
+    target: Res<TargetNumber>,
+    end_screen: Query<(), With<EndGameScreen>>,
+) {
+    if timer.remaining_secs > 0.0 {
+        return;
+    }
+
+    if current_sum.0 == target.0 as i32 {
+        next_state.set(GameState::Won);
+        if end_screen.is_empty() {
+            spawn_end_screen(&mut commands, "You won!");
+        }
+        return;
+    }
+
+    next_state.set(GameState::Lost);
+    if end_screen.is_empty() {
+        spawn_end_screen(&mut commands, "You lost");
+    }
+}
+
 fn check_game_end(
     mut commands: Commands,
     mut next_state: ResMut<NextState<GameState>>,
@@ -528,10 +595,19 @@ fn try_again_button(
 
 fn setup_current_sum_ui(commands: &mut Commands) {
     commands.insert_resource(CurrentSum(0));
+    commands.insert_resource(GameTimer::new(GAME_TIMER_SECS));
 
-    let sum_text_style = (
+    let value_text_style = (
         TextFont {
             font_size: CURRENT_SUM_FONT_SIZE,
+            ..default()
+        },
+        TextColor(Color::BLACK),
+    );
+
+    let timer_text_style = (
+        TextFont {
+            font_size: TIMER_FONT_SIZE,
             ..default()
         },
         TextColor(Color::BLACK),
@@ -547,22 +623,42 @@ fn setup_current_sum_ui(commands: &mut Commands) {
             padding: UiRect::all(px(16)),
             flex_direction: FlexDirection::Column,
             align_items: AlignItems::FlexEnd,
-            row_gap: px(8),
+            row_gap: px(16),
             ..default()
         },
-        children![(
-            Text::new("Current"),
-            TextFont {
-                font_size: 28.0,
-                ..default()
-            },
-            TextColor(Color::BLACK),
-        ), (
-            Text::new(""),
-            CurrentSumUi,
-            sum_text_style.clone(),
-            children![(TextSpan::default(), sum_text_style)],
-        )],
+        children![
+            (
+                Text::new("Time"),
+                TextFont {
+                    font_size: 28.0,
+                    ..default()
+                },
+                TextColor(Color::BLACK),
+            ),
+            (
+                Text::new(""),
+                TimerUi,
+                timer_text_style.clone(),
+                children![(
+                    TextSpan::default(),
+                    timer_text_style,
+                )],
+            ),
+            (
+                Text::new("Current"),
+                TextFont {
+                    font_size: 28.0,
+                    ..default()
+                },
+                TextColor(Color::BLACK),
+            ),
+            (
+                Text::new(""),
+                CurrentSumUi,
+                value_text_style.clone(),
+                children![(TextSpan::default(), value_text_style)],
+            )
+        ],
     ));
 }
 
